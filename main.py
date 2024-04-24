@@ -3,7 +3,7 @@ from telebot import types
 import sqlite3
 import functools
 
-TOKEN = 'token' ##put your token here /// вставьте сюда свой токен бота
+TOKEN = 'token'
 bot = telebot.TeleBot(TOKEN)
 CURRENT_PAGE = {}
 user_data = {}
@@ -77,7 +77,7 @@ def send_books(bot, message):
         current_page = CURRENT_PAGE.get(message.chat.id, 0)
         paginated_books = paginate_list(books_data, current_page, items_per_page)
 
-        books_text = "\n\n".join([f"📖 {title}\n📝 {review}\n⭐ Rating: {rating}" for title, review, rating in paginated_books])
+        books_text = "\n\n".join([f"📖 {title}\n📝 {review}\n⭐ Оценка: {rating}" for title, review, rating in paginated_books])
         pagination_markup = create_pagination_markup(current_page, len(books_data), items_per_page)
 
         bot.reply_to(message, f"Список книг:\n\n{books_text}", reply_markup=pagination_markup)
@@ -100,18 +100,22 @@ def process_title_step(message):
 def process_review_step(message, title):
     user_id = message.chat.id
     review = message.text
-    rating_markup = create_rating_markup()
-    bot.send_message(user_id, f"Поставьте оценку книге '{title}':", reply_markup=rating_markup)
+    bot.send_message(user_id, f"Введите оценку книге '{title}' от 0.1 до 5:")
+    bot.register_next_step_handler(message, process_rating_step, title, review)
 
-    callback_with_args = functools.partial(process_rating_step, title, review)
-    bot.register_next_step_handler(message, callback_with_args)
-
-def process_rating_step(title, review, message):
+def process_rating_step(message, title, review):
     chat_id = message.chat.id
     rating = message.text
 
-    save_review(chat_id, title, review, rating)
-    bot.reply_to(message, "Отлично! Ваш отзыв сохранен. Спасибо за ваши впечатления.")
+    try:
+        rating = float(rating)
+        if rating < 0.1 or rating > 5:
+            raise ValueError
+        save_review(chat_id, title, review, rating)
+        bot.reply_to(message, "Отлично! Ваш отзыв сохранен. Спасибо за ваши впечатления.")
+    except ValueError:
+        bot.reply_to(message, "Оценка должна быть числом от 0.1 до 5. Попробуйте еще раз.")
+        process_review_step(message, title)
 
     user_data[chat_id] = {}
     show_default_keyboard(bot, chat_id)
@@ -163,36 +167,34 @@ def process_edit_review(message):
         bot.register_next_step_handler(message, process_new_review, title)
     else:
         bot.reply_to(message, f"Книги с названием '{title_to_edit}' нет в библиотеке.")
-        show_default_keyboard(message)
+        show_default_keyboard(bot, message.chat.id)
 
 def process_new_review(message, title):
     new_review = message.text
-    rating_markup = create_rating_markup()
-    bot.send_message(message.chat.id, f"Поставьте новую оценку книге '{title}':", reply_markup=rating_markup)
+    bot.send_message(message.chat.id, f"Введите новую оценку книге '{title}' от 0.1 до 5:")
     bot.register_next_step_handler(message, process_new_rating, title, new_review)
 
 def process_new_rating(message, title, new_review):
     new_rating = message.text
 
-    conn = create_connection(message.chat.id)
-    cursor = conn.cursor()
+    try:
+        new_rating = float(new_rating)
+        if new_rating < 0.1 or new_rating > 5:
+            raise ValueError
+        conn = create_connection(message.chat.id)
+        cursor = conn.cursor()
 
-    cursor.execute('UPDATE books SET review=?, rating=? WHERE title=?', (new_review, new_rating, title))
-    conn.commit()
+        cursor.execute('UPDATE books SET review=?, rating=? WHERE title=?', (new_review, new_rating, title))
+        conn.commit()
 
-    conn.close()
+        conn.close()
 
-    bot.reply_to(message, f"Отзыв о книге '{title}' успешно отредактирован:\n📝 {new_review}\n⭐ Rating: {new_rating}")
-    show_default_keyboard(message)
+        bot.reply_to(message, f"Отзыв о книге '{title}' успешно отредактирован:\n📝 {new_review}\n⭐ Rating: {new_rating}")
+    except ValueError:
+        bot.reply_to(message, "Оценка должна быть числом от 0.1 до 5. Попробуйте еще раз.")
+        process_new_review(message, title)
 
-def create_rating_markup():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    ratings = ["1 ⭐️", "2 ⭐️", "3 ⭐️", "4 ⭐️", "5 ⭐️"]
-
-    for rating in ratings:
-        markup.add(types.InlineKeyboardButton(rating, callback_data=f"rating_{rating}"))
-
-    return markup
+    show_default_keyboard(bot, message.chat.id)
 
 def paginate_list(data_list, current_page, items_per_page):
     start_index = current_page * items_per_page
@@ -227,10 +229,6 @@ def callback_handler(call):
         delete_review(call.message)
     elif call.data == 'edit_review':
         edit_review(call.message)
-    elif call.data.startswith("rating_"):
-
-        rating = call.data.replace("rating_", "")
-        bot.send_message(call.message.chat.id, f"Вы выбрали оценку: {rating}")
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
